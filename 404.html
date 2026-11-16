@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<link rel="canonical" href="https://xn--slktsagan-w2a.se/">
+<title>Släktsagan har flyttat</title>
+<style>
+  body{margin:0;font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;background:#efe4cf;color:#2a2018;display:grid;place-items:center;min-height:100vh}
+  main{max-width:520px;margin:24px;padding:28px;background:#fbf6ec;border:1px solid #d9c9a8;border-radius:16px}
+  h1{font-size:22px;margin:0 0 8px}
+  .bar{height:8px;background:#e6d8bb;border-radius:4px;overflow:hidden;margin:16px 0}
+  .bar i{display:block;height:100%;width:0;background:#2f5d4a;transition:width .2s}
+  .btn{display:inline-block;padding:10px 16px;border-radius:10px;border:1px solid #2f5d4a;background:#2f5d4a;color:#fff;text-decoration:none;font-weight:600;cursor:pointer;font-size:15px}
+  .btn.ghost{background:transparent;color:#2f5d4a}
+  .muted{color:#6d5c48;font-size:14px}
+  [hidden]{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1>Släktsagan har flyttat</h1>
+  <p>Den nya adressen är <b>släktsagan.se</b>.</p>
+  <div id="ask" hidden>
+    <p>Du har ett släktarkiv sparat i den här webbläsaren på den gamla adressen<span id="what"></span>. Webbläsare sparar data per adress, så det behöver flyttas – det tar några sekunder och går aldrig via någon server.</p>
+    <p><button class="btn" id="go">Flytta mitt arkiv</button> <a class="btn ghost" id="skip">Gå vidare utan att flytta</a></p>
+    <p class="muted">Inget tas bort här. Du kan flytta igen om något går fel.</p>
+  </div>
+  <div class="bar" id="barw" hidden><i id="bar"></i></div>
+  <p id="msg" class="muted">Skickar dig vidare…</p>
+</main>
+<script>
+/* An old address (klansagan.godvig.com, saga.godvig.com) → släktsagan.se. The same files are published on
+   every old address; nothing in them depends on which one they are served from.
+   Visitors with nothing saved here are sent straight on, with the rest of the address kept
+   (shared links like #dela-… keep working). Visitors with an archive saved under the old address
+   are offered to move it: this page opens /flytt.html on the new address and hands over the
+   archive, photos, voice memories and the keys to shared trees with postMessage. */
+(async function(){
+  // Punycode: it is what location.origin and postMessage's e.origin are on the new address.
+  var TO = 'https://xn--slktsagan-w2a.se';
+  var OLD = ['https://klansagan.godvig.com', 'https://saga.godvig.com'];
+  var rest = location.pathname.replace(/^\/(index\.html)?/, '/') + location.search + location.hash;
+  var $ = function(id){ return document.getElementById(id); };
+  var onward = function(){ location.replace(TO + rest); };
+  $('skip').href = TO + rest;
+
+  // The old app's service worker would otherwise keep serving the old app from its cache.
+  try{ if('serviceWorker' in navigator){ var rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(function(r){ return r.unregister(); })); }
+    if(window.caches){ var ks = await caches.keys(); await Promise.all(ks.map(function(k){ return caches.delete(k); })); } }catch(e){}
+
+  var local = {};
+  try{ for(var i = 0; i < localStorage.length; i++){ var k = localStorage.key(i); local[k] = localStorage.getItem(k); } }catch(e){}
+  // Already moved from here. Someone who moved klansagan → saga.godvig.com has their archive on saga, so they are
+  // sent there (which offers the next move) and not straight to the new address, where they would find nothing.
+  var movedTo = local['klansagan-moved-to'];
+  if(movedTo){ var via = OLD.indexOf(movedTo) >= 0 && movedTo !== location.origin ? movedTo : TO; return location.replace(via + rest); }
+
+  // Read everything in the old IndexedDB without creating one where there was none.
+  var archive = [], blobs = [];
+  try{
+    var known = indexedDB.databases ? (await indexedDB.databases()).some(function(d){ return d.name === 'klansagan'; }) : true;
+    if(known){
+      var db = await new Promise(function(ok, bad){ var r = indexedDB.open('klansagan'); r.onsuccess = function(){ ok(r.result); }; r.onerror = function(){ bad(r.error); }; });
+      var all = function(store){ return new Promise(function(ok){ if(!db.objectStoreNames.contains(store)) return ok([]);
+        var out = [], c = db.transaction(store).objectStore(store).openCursor();
+        c.onsuccess = function(){ var cur = c.result; if(cur){ out.push([String(cur.key), cur.value]); cur.continue(); } else ok(out); }; c.onerror = function(){ ok(out); }; }); };
+      archive = await all('archive'); blobs = await all('blobs');
+    }
+  }catch(e){}
+  // Archives from before IndexedDB were kept in localStorage; they travel with the rest.
+  var persons = 0;
+  archive.forEach(function(a){ if(a[0] === 'klansagan-v1' && a[1] && a[1].persons) persons = Object.keys(a[1].persons).length; });
+  var shared = 0; try{ shared = Object.keys(JSON.parse(local['klansagan-shares'] || '{}').trees || {}).length; }catch(e){}
+  var hasData = archive.length || shared || Object.keys(local).some(function(k){ return /^(klansagan-v1|kinsaga-v1|slaktarkivet-v1|klansagan-tree-)/.test(k); });
+  if(!hasData) return onward();
+
+  $('what').textContent = (persons ? ' (' + persons + ' personer' : ' (') + (blobs.length ? (persons ? ', ' : '') + blobs.length + ' bilder och ljud' : '') + (shared ? ((persons || blobs.length) ? ', ' : '') + shared + ' delade träd' : '') + ')';
+  if($('what').textContent === ' ()') $('what').textContent = '';
+  $('ask').hidden = false; $('msg').textContent = '';
+
+  $('go').onclick = function(){
+    var w = window.open(TO + '/flytt.html', '_blank');
+    if(!w){ $('msg').textContent = 'Webbläsaren stoppade det nya fönstret. Tillåt popup-fönster för den här sidan och tryck igen.'; return; }
+    $('go').disabled = true; $('barw').hidden = false; $('msg').textContent = 'Öppnar den nya adressen…';
+    // One message per archive (they can be large), photos twenty at a time; each waits for a reply.
+    var queue = [], sent = 0, total = archive.length + blobs.length;
+    archive.forEach(function(a){ queue.push({ t: 'archive', items: [a] }); });
+    for(var i = 0; i < blobs.length; i += 20) queue.push({ t: 'blobs', items: blobs.slice(i, i + 20) });
+    queue.push({ t: 'local', items: local });
+    queue.push({ t: 'done' });
+    var next = function(){ var m = queue.shift(); if(!m) return; m.n = ++sent; w.postMessage(m, TO); };
+    window.addEventListener('message', function(e){
+      if(e.origin !== TO || e.source !== w) return;
+      var m = e.data || {};
+      if(m.t === 'ready') w.postMessage({ t: 'start', total: total, persons: persons, hash: location.hash }, TO);
+      else if(m.t === 'go' || m.t === 'ack'){ var p = Math.round(100 * (total - queue.filter(function(q){ return q.t === 'archive' || q.t === 'blobs'; }).reduce(function(s, q){ return s + q.items.length; }, 0)) / Math.max(1, total));
+        $('bar').style.width = p + '%'; $('msg').textContent = 'Flyttar… ' + p + ' %'; next(); }
+      else if(m.t === 'thanks'){ try{ localStorage.setItem('klansagan-moved-to', TO); }catch(err){}
+        $('bar').style.width = '100%'; $('ask').hidden = true;
+        $('msg').innerHTML = 'Klart! Fortsätt i det nya fönstret, eller <a href="' + TO + rest + '">öppna Släktsagan på den nya adressen</a>.'; }
+      else if(m.t === 'refused'){ $('go').disabled = false; $('barw').hidden = true; $('msg').textContent = 'Det finns redan ett släktarkiv på den nya adressen, så ingenting har flyttats. Ta en säkerhetskopia under ”Läs in & spara” här och läs in den på den nya adressen – se det nya fönstret.'; }
+      else if(m.t === 'error'){ $('go').disabled = false; $('msg').textContent = 'Något gick fel: ' + m.error + '. Inget har tagits bort här – prova igen.'; }
+    });
+  };
+})();
+</script>
+</body>
+</html>
